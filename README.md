@@ -1,36 +1,66 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 증권·금융사 임원 보수
 
-## Getting Started
+DART 전자공시 사업보고서에서 유가증권시장 상장 증권·금융·투자 회사의
+**임원 개인별 보수(5억원 이상 상위 5인)** 를 모아 한 화면에서 보는 앱.
 
-First, run the development server:
+## 준비
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+1. https://opendart.fss.or.kr 에서 인증키 발급 (무료, 일일 20,000건)
+2. `.env.local` 생성
+
+```
+DART_API_KEY=발급받은40자리키
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 사용
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm collect          # ① 보수 총액 수집 (최근 5개년) → data/pay.json
+pnpm enrich           # ② 원문에서 보수 종류별 내역을 파싱해 붙임
+pnpm dev              # http://localhost:3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`pnpm collect 2024 2025` 처럼 연도를 지정할 수 있고,
+`pnpm enrich --limit 5 --report` 는 보고서 5건만 돌려 성공률만 확인합니다
+(파일을 건드리지 않음).
 
-## Learn More
+## 구조
 
-To learn more about Next.js, take a look at the following resources:
+| 경로 | 역할 |
+| --- | --- |
+| `scripts/lib/dart.ts` | DART OpenAPI 클라이언트 (고유번호, 보수, 원문) |
+| `scripts/lib/companies.ts` | `증권\|금융\|투자` 이름 규칙 + 수동 보정으로 대상 회사 확정 |
+| `scripts/lib/basis.ts` | "산정기준 및 방법" 표 파서 (rowspan 전개, 단위 환산) |
+| `scripts/collect.ts` | ① 보수 총액 수집 |
+| `scripts/enrich.ts` | ② 종류별 내역 파싱·매칭 |
+| `scripts/try-basis.ts` | 파서 확인용 도구 (접수번호를 인자로) |
+| `data/companies.override.json` | 대상에서 빼거나 넣을 회사 목록 |
+| `src/lib/pay.ts` | 공용 타입·표시 포맷 (`pay.server.ts` 가 파일 로딩) |
+| `src/components/PayExplorer.tsx` | 검색·연도 필터·정렬·무한 스크롤 화면 |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+원문 보고서는 건당 최대 20MB라 통째로 두지 않고, 필요한 표 조각만
+`.cache/slices/` 에 남깁니다. 파서를 고칠 때는 `.cache/slices` 를 지우고
+`pnpm enrich` 를 다시 돌리면 됩니다.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 데이터에 대해
 
-## Deploy on Vercel
+- 보수 **총액**은 `indvdlByPay` API에서 그대로 받습니다.
+  (Ver 2.0 API는 문서만 있고 실제 응답이 비어 있어 V1을 씁니다.)
+- **산정기준 및 방법**(급여·상여·주식매수선택권 행사이익·퇴직소득 등 종류별
+  세부 금액)은 API에 필드가 없어 사업보고서 원문 표를 파싱합니다.
+- 공시 대상은 보수 총액 5억원 이상이므로, 그 아래 임원은 애초에 나오지 않습니다.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 대상 회사 범위
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+유가증권시장과 코스닥에 상장된 **증권회사**가 대상입니다.
+이름에 `증권|금융|투자` 가 들어가는 상장사를 1차로 고른 뒤,
+`data/companies.override.json` 으로 다음을 걸러냅니다.
+
+- **은행지주 제외** — 신한지주, KB금융, 하나금융지주, 우리금융지주,
+  BNK·JB·iM금융지주
+- **증권사가 아닌 회사 제외** — 아주IB투자·우리기술투자·미래에셋벤처투자(창투사),
+  인카금융서비스(보험대리점)
+- **유지** — 메리츠금융지주, 한국금융지주는 은행이 없는 비은행 금융지주
+  (각각 메리츠증권·한국투자증권 모회사)
+
+스팩처럼 공시 대상자가 아예 없는 회사는 자동으로 빠집니다.

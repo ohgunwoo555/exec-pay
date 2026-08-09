@@ -1,26 +1,77 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  color-scheme: light dark;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --bg: #f6f7f9;
+  --bg-elevated: #ffffff;
+  --border: #e3e6ea;
+  --fg: #14161a;
+  --fg-muted: #656c78;
+  --accent: #2f6bff;
+  --accent-soft: #e8eeff;
+  --bar-from: #4f7dff;
+  --bar-to: #8b5cf6;
+  --glass: rgb(255 255 255 / 0.72);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg: #08090c;
+    --bg-elevated: #101218;
+    --border: #21242e;
+    --fg: #edeff4;
+    --fg-muted: #8b93a3;
+    --accent: #6f9bff;
+    --accent-soft: #16203a;
+    --bar-from: #5b8bff;
+    --bar-to: #a78bfa;
+    --glass: rgb(16 18 24 / 0.72);
   }
 }
 
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--bg-elevated);
+  --color-line: var(--border);
+  --color-ink: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --font-mono: var(--font-geist-mono);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard",
+    "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 2026 트렌드: 각진 라운드 대신 squircle에 가까운 부드러운 모서리 */
+.squircle {
+  border-radius: 18px;
+}
+
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+}
+
+/* 숫자는 자리수가 흔들리지 않게 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
