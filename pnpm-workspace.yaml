@@ -1,3 +1,13 @@
+# 설치 중 빌드 스크립트 실행을 허용할 패키지.
+# 승인되지 않은 패키지가 있으면 pnpm install 이 exit 1 로 끝나 배포가 실패한다.
+# allowBuilds 는 pnpm 11, onlyBuiltDependencies 는 pnpm 10 이하가 읽는다.
+# (Vercel 이 어느 쪽을 쓰든 통하도록 둘 다 둔다.)
 allowBuilds:
   esbuild: true
   sharp: true
+  unrs-resolver: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - unrs-resolver
