@@ -42,13 +42,25 @@ function halfReportAvailable(now = new Date()): boolean {
 }
 
 /**
- * 올해는 사업보고서가 아직 없으므로 반기보고서로, 지난 연도는 사업보고서로 받는다.
- * 내년이 되면 올해가 자동으로 사업보고서 쪽으로 넘어간다.
+ * 사업보고서 법정 제출기한은 회계연도 종료 후 90일, 즉 이듬해 3월 말이다.
+ * 4월부터 있다고 본다.
+ */
+function annualReportAvailable(year: string, now = new Date()): boolean {
+  const due = Number(year) + 1;
+  return now.getFullYear() > due || (now.getFullYear() === due && now.getMonth() >= 3);
+}
+
+/**
+ * 사업보고서가 나왔으면 연간, 아직이면 반기로 받는다.
+ *
+ * 단순히 "올해면 반기"로 하면 1~3월에 문제가 생긴다. 해가 바뀌자마자 작년이
+ * 연간 쪽으로 넘어가는데 사업보고서는 3월 말에나 나오므로, 그 사이에 수집하면
+ * 이미 받아둔 작년 반기 데이터가 빈 값으로 덮어써진다.
  */
 function reportFor(year: string, now = new Date()): Omit<Target, "year"> {
-  return Number(year) >= now.getFullYear()
-    ? { reprtCode: REPRT_HALF, period: "half" }
-    : { reprtCode: REPRT_ANNUAL, period: "annual" };
+  return annualReportAvailable(year, now)
+    ? { reprtCode: REPRT_ANNUAL, period: "annual" }
+    : { reprtCode: REPRT_HALF, period: "half" };
 }
 
 /** 사업보고서 기준 최근 count개년 + (가능하면) 올해 반기 */
@@ -58,7 +70,7 @@ function defaultTargets(count: number, now = new Date()): Target[] {
     String(latest - i)
   )
     .reverse()
-    .map((year) => ({ year, reprtCode: REPRT_ANNUAL, period: "annual" }));
+    .map((year) => ({ year, ...reportFor(year, now) }));
 
   if (halfReportAvailable(now)) {
     const year = String(now.getFullYear());
@@ -110,8 +122,15 @@ function toNumber(raw: string | undefined): number {
 
 async function main() {
   const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+  // --half: 지정한 연도를 반기보고서로 강제한다. 과거 연도 반기를 확인할 때 쓴다.
+  const forceHalf = process.argv.includes("--half");
   const targets: Target[] = args.length
-    ? args.map((year) => ({ year, ...reportFor(year) }))
+    ? args.map((year) => ({
+        year,
+        ...(forceHalf
+          ? { reprtCode: REPRT_HALF, period: "half" as Period }
+          : reportFor(year)),
+      }))
     : defaultTargets(5);
   const years = targets.map((t) => t.year);
   mkdirSync(DATA_DIR, { recursive: true });
