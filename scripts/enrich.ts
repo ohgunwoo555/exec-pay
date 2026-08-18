@@ -3,8 +3,9 @@
  * 보수 종류별 내역을 붙인다.
  *
  *   pnpm enrich              전체
- *   pnpm enrich --limit 5    보고서 5건만 (파서 손볼 때)
- *   pnpm enrich --report     붙이지 않고 성공률만 확인
+ *   pnpm enrich --limit 5      보고서 5건만 (파서 손볼 때)
+ *   pnpm enrich --report       붙이지 않고 성공률만 확인
+ *   pnpm enrich --only-missing 아직 안 붙인 건만 (일별 수집용)
  *
  * 보고서 원문은 건당 20MB에 가까워서 통째로 캐시하지 않고,
  * 필요한 표 조각만 .cache/slices 에 남긴다.
@@ -70,9 +71,14 @@ async function main() {
     records: PayRecord[];
   };
 
+  // --only-missing: 아직 시도하지 않은 건만 처리한다. 시도했지만 표에서 못 찾은
+  // 건은 breakdown이 빈 배열로 남아 있어 매일 원문을 다시 받는 일이 없다.
+  const onlyMissing = flag("only-missing");
+
   const byReport = new Map<string, PayRecord[]>();
   for (const record of dataset.records) {
     if (!record.rceptNo) continue;
+    if (onlyMissing && record.breakdown !== undefined) continue;
     const list = byReport.get(record.rceptNo) ?? [];
     list.push(record);
     byReport.set(record.rceptNo, list);
@@ -82,7 +88,11 @@ async function main() {
   const limit = Number(flagValue("limit") ?? 0);
   if (limit > 0) reports = reports.slice(0, limit);
 
-  console.log(`보고서 ${reports.length}건 처리`);
+  console.log(`보고서 ${reports.length}건 처리${onlyMissing ? " (미처리분만)" : ""}`);
+  if (!reports.length) {
+    console.log("새로 붙일 내역이 없습니다.");
+    return;
+  }
 
   let matched = 0;
   let unmatched = 0;
@@ -114,6 +124,8 @@ async function main() {
       const mine = pickClosest(candidates, record.total);
 
       if (!mine.length) {
+        // 시도했음을 남긴다 — 다음 실행에서 --only-missing이 건너뛸 수 있도록
+        record.breakdown = [];
         unmatched++;
         failures.push(`${record.corpName} ${record.year} ${record.name}: 표에서 못 찾음`);
         continue;

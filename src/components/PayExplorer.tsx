@@ -307,7 +307,8 @@ function Row({
   open: boolean;
   onToggle: () => void;
 }) {
-  const hasDetail = record.breakdown.length > 0;
+  const detail = record.breakdown ?? [];
+  const hasDetail = detail.length > 0;
 
   return (
     <li className="squircle overflow-hidden border border-[var(--border)] bg-[var(--bg-elevated)]">
@@ -365,7 +366,7 @@ function Row({
         <div className="border-t border-[var(--border)] px-4 py-4">
           {hasDetail ? (
             <ul className="flex flex-col gap-3">
-              {record.breakdown.map((item, i) => (
+              {detail.map((item, i) => (
                 <li key={i}>
                   <div className="flex items-baseline justify-between gap-4">
                     <p className="text-sm font-medium">{item.label}</p>

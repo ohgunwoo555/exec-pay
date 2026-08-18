@@ -39,6 +39,32 @@ pnpm dev              # http://localhost:3000
 - OpenDART는 원문 접수와 API 반영 사이에 시차가 있어, 제출기한 직후에는
   `013`(데이터 없음)이 나올 수 있습니다.
 
+### 일별 수집
+
+공시는 회사별로 며칠에 걸쳐 올라온다. `.github/workflows/daily-collect.yml` 이
+매일 KST 06:00에 아래를 돌려 새로 올라온 것만 붙인다.
+
+```bash
+pnpm collect --merge      # 응답 받은 조각만 갈아끼움 (없는 회사는 기존 유지)
+pnpm enrich --only-missing # 아직 안 붙인 건만
+```
+
+`--merge` 없이 돌리면 **pay.json을 통째로 덮어쓴다.** 연도를 지정해 확인만 할
+때는 끝나고 `git checkout -- data/` 로 되돌릴 것.
+
+리포지토리 Settings → Secrets and variables → Actions 에 `DART_API_KEY` 를
+등록해야 동작한다.
+
+무인으로 도는 경로라 두 가지 안전장치를 뒀다.
+
+- **급감 가드** — 결과가 직전 대비 10% 넘게 줄면 파일을 쓰지 않고 실패한다.
+  의도한 축소라면 `--force` 를 붙인다.
+- **저장 순서 고정** — `year → period → corpCode → name` 순으로 저장한다.
+  금액순으로 두면 한 건만 늘어도 아래가 전부 밀려 매일 수백 줄짜리 diff가 난다.
+
+인증키가 잘못됐거나 DART가 점검 중이면 ZIP 파서 오류 대신
+`고유번호 목록 조회 실패 [010] …` 처럼 원인이 그대로 찍힌다.
+
 ## 구조
 
 | 경로 | 역할 |

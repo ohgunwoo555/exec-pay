@@ -29,7 +29,11 @@ export type PayRecord = {
   position: string;
   /** 보수 총액(원). period가 half면 상반기 누적 금액이다. */
   total: number;
-  breakdown: Breakdown[];
+  /**
+   * 보수 종류별 내역. enrich 전이면 undefined, 원문에서 못 찾았으면 빈 배열이다.
+   * 이 구분이 있어야 일별 수집에서 실패 건을 매번 다시 받지 않는다.
+   */
+  breakdown?: Breakdown[];
 };
 
 export type PayDataset = {

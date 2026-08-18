@@ -6,7 +6,7 @@
  *
  * 보수 종류별 세부 내역은 이어서 pnpm enrich 로 붙인다.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   fetchIndvdlPay,
@@ -120,10 +120,85 @@ function toNumber(raw: string | undefined): number {
   return digits ? Number(digits) : NaN;
 }
 
+/**
+ * 이번에 응답을 받은 (연도·기간·회사) 조각만 새 것으로 갈아끼우고 나머지는 둔다.
+ *
+ * 공시가 회사별로 며칠에 걸쳐 올라오므로, 아직 안 올라온 회사를 "0건"으로 보고
+ * 지워버리면 안 된다. 그래서 응답이 없는 조각은 손대지 않는다.
+ */
+function mergeRecords(existing: PayRecord[], incoming: PayRecord[]): PayRecord[] {
+  const sliceKey = (r: PayRecord) => `${r.year}|${r.period}|${r.corpCode}`;
+  const rowKey = (r: PayRecord) => `${r.rceptNo}|${r.name}|${r.position}`;
+
+  const refreshed = new Set(incoming.map(sliceKey));
+
+  // 같은 보고서의 같은 사람이면 이미 파싱해둔 내역을 물려받는다 (원문 재다운로드 방지)
+  const previous = new Map(existing.map((r) => [rowKey(r), r]));
+  const carried = incoming.map((r) => {
+    const old = previous.get(rowKey(r));
+    return old?.breakdown !== undefined && r.breakdown === undefined
+      ? { ...r, breakdown: old.breakdown }
+      : r;
+  });
+
+  return [...existing.filter((r) => !refreshed.has(sliceKey(r))), ...carried];
+}
+
+function mergeCompanies(existing: Company[], incoming: Company[]): Company[] {
+  const byCode = new Map(existing.map((c) => [c.corp_code, c]));
+  for (const c of incoming) byCode.set(c.corp_code, c);
+  return [...byCode.values()].sort((a, b) =>
+    a.corp_name.localeCompare(b.corp_name, "ko")
+  );
+}
+
+/**
+ * 결과가 직전보다 크게 줄면 쓰지 않고 실패시킨다.
+ *
+ * merge는 조각 단위 유실을 막지만 전체가 망가지는 경우는 못 막는다. DART 응답
+ * 형식이 바뀌거나 회사 필터가 어긋나면 이상한 pay.json이 그대로 커밋되고,
+ * 자동 배포까지 이어진다. 무인으로 도는 경로라 조용히 틀리는 것보다 멈추는 게 낫다.
+ * 강제로 다시 만들어야 할 때는 --force 를 준다.
+ */
+const COLLAPSE_RATIO = 0.9;
+
+function assertNoCollapse(previous: PayRecord[], next: PayRecord[]): void {
+  if (process.argv.includes("--force")) return;
+  if (!previous.length) return; // 최초 수집
+
+  const floor = Math.floor(previous.length * COLLAPSE_RATIO);
+  if (next.length >= floor) return;
+
+  throw new Error(
+    `레코드가 ${previous.length}건 → ${next.length}건으로 급감했습니다 ` +
+      `(기준 ${floor}건). 데이터를 쓰지 않고 중단합니다.\n` +
+      `  DART 응답이나 회사 필터를 확인하고, 의도한 변경이면 --force 를 붙이세요.`
+  );
+}
+
+function loadExisting(): { records: PayRecord[] } {
+  try {
+    const raw = readFileSync(resolve(DATA_DIR, "pay.json"), "utf8");
+    return { records: JSON.parse(raw).records ?? [] };
+  } catch {
+    return { records: [] };
+  }
+}
+
+function loadExistingCompanies(): Company[] {
+  try {
+    return JSON.parse(readFileSync(resolve(DATA_DIR, "companies.json"), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   // --half: 지정한 연도를 반기보고서로 강제한다. 과거 연도 반기를 확인할 때 쓴다.
   const forceHalf = process.argv.includes("--half");
+  // --merge: 덮어쓰지 않고 이번에 받은 조각만 갈아끼운다 (일별 수집용)
+  const mergeMode = process.argv.includes("--merge");
   const targets: Target[] = args.length
     ? args.map((year) => ({
         year,
@@ -132,7 +207,6 @@ async function main() {
           : reportFor(year)),
       }))
     : defaultTargets(5);
-  const years = targets.map((t) => t.year);
   mkdirSync(DATA_DIR, { recursive: true });
 
   console.log(
@@ -194,7 +268,6 @@ async function main() {
         name,
         position: cleanName(row.ofcps),
         total,
-        breakdown: [],
       });
     }
   }
@@ -202,15 +275,41 @@ async function main() {
   console.log(`  ${confirmed.size}개사 / ${records.length}건 수집`);
 
   // 보수 종류별 세부 내역은 원문을 파싱해야 하므로 pnpm enrich 가 이어서 붙인다.
-  records.sort((a, b) => b.total - a.total);
+  const previous = loadExisting().records;
+  const merged = mergeMode ? mergeRecords(previous, records) : records;
+
+  if (mergeMode) {
+    console.log(`  병합 후 ${merged.length}건 (기존 유지분 포함)`);
+  }
+
+  assertNoCollapse(previous, merged);
+
+  // 저장 순서는 화면 정렬과 무관하다(PayExplorer가 다시 정렬한다). 금액순으로
+  // 두면 레코드 하나만 늘어도 그 아래가 전부 밀려 매일 수백 줄짜리 diff가 난다.
+  // 일별 커밋이 쌓이는 파일이므로 변경분만 남도록 안정적인 키로 정렬한다.
+  merged.sort(
+    (a, b) =>
+      a.year.localeCompare(b.year) ||
+      a.period.localeCompare(b.period) ||
+      a.corpCode.localeCompare(b.corpCode) ||
+      a.name.localeCompare(b.name, "ko") ||
+      a.rceptNo.localeCompare(b.rceptNo)
+  );
+
+  // 실제로 데이터가 있는 연도만 노출한다
+  const years = [...new Set(merged.map((r) => r.year))].sort();
+
+  const companies = mergeMode
+    ? mergeCompanies(loadExistingCompanies(), [...confirmed.values()])
+    : [...confirmed.values()];
 
   writeFileSync(
     resolve(DATA_DIR, "pay.json"),
-    JSON.stringify({ years, updatedAt: new Date().toISOString(), records }, null, 2)
+    JSON.stringify({ years, updatedAt: new Date().toISOString(), records: merged }, null, 2)
   );
   writeFileSync(
     resolve(DATA_DIR, "companies.json"),
-    JSON.stringify([...confirmed.values()], null, 2)
+    JSON.stringify(companies, null, 2)
   );
 
   console.log("완료: data/pay.json, data/companies.json");
