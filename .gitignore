@@ -43,3 +43,6 @@ next-env.d.ts
 # 로컬 전용
 .env.local
 .cache/
+
+# npm 락파일 — 이 프로젝트는 pnpm을 쓴다
+package-lock.json

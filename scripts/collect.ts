@@ -8,9 +8,16 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fetchIndvdlPay, sleep, type IndvdlPayRow } from "./lib/dart.js";
+import {
+  fetchIndvdlPay,
+  sleep,
+  REPRT_ANNUAL,
+  REPRT_HALF,
+  type IndvdlPayRow,
+  type ReprtCode,
+} from "./lib/dart.js";
 import { resolveCompanies, type Company } from "./lib/companies.js";
-import type { PayRecord } from "./lib/types.js";
+import type { PayRecord, Period } from "./lib/types.js";
 
 process.loadEnvFile(".env.local");
 
@@ -23,10 +30,41 @@ const CONCURRENCY = 4;
 /** 수집 대상 시장. Y=유가증권, K=코스닥 (N=코넥스, E=기타는 제외) */
 const MARKETS = new Set(["Y", "K"]);
 
-function recentYears(count: number): string[] {
-  // 사업보고서는 회계연도 종료 후 3개월 안에 나오므로 올해 것은 아직 없을 수 있다.
-  const latest = new Date().getFullYear() - 1;
-  return Array.from({ length: count }, (_, i) => String(latest - i)).reverse();
+type Target = { year: string; reprtCode: ReprtCode; period: Period };
+
+/**
+ * 반기보고서 법정 제출기한은 반기 종료 후 45일, 즉 8월 14일이다.
+ * 그 전에는 올해 반기 데이터가 아직 없으므로 대상에서 뺀다.
+ */
+function halfReportAvailable(now = new Date()): boolean {
+  const august = now.getMonth() === 7;
+  return now.getMonth() > 7 || (august && now.getDate() >= 15);
+}
+
+/**
+ * 올해는 사업보고서가 아직 없으므로 반기보고서로, 지난 연도는 사업보고서로 받는다.
+ * 내년이 되면 올해가 자동으로 사업보고서 쪽으로 넘어간다.
+ */
+function reportFor(year: string, now = new Date()): Omit<Target, "year"> {
+  return Number(year) >= now.getFullYear()
+    ? { reprtCode: REPRT_HALF, period: "half" }
+    : { reprtCode: REPRT_ANNUAL, period: "annual" };
+}
+
+/** 사업보고서 기준 최근 count개년 + (가능하면) 올해 반기 */
+function defaultTargets(count: number, now = new Date()): Target[] {
+  const latest = now.getFullYear() - 1;
+  const targets: Target[] = Array.from({ length: count }, (_, i) =>
+    String(latest - i)
+  )
+    .reverse()
+    .map((year) => ({ year, reprtCode: REPRT_ANNUAL, period: "annual" }));
+
+  if (halfReportAvailable(now)) {
+    const year = String(now.getFullYear());
+    targets.push({ year, reprtCode: REPRT_HALF, period: "half" });
+  }
+  return targets;
 }
 
 async function mapWithLimit<T, R>(
@@ -72,32 +110,49 @@ function toNumber(raw: string | undefined): number {
 
 async function main() {
   const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-  const years = args.length ? args : recentYears(5);
+  const targets: Target[] = args.length
+    ? args.map((year) => ({ year, ...reportFor(year) }))
+    : defaultTargets(5);
+  const years = targets.map((t) => t.year);
   mkdirSync(DATA_DIR, { recursive: true });
+
+  console.log(
+    "대상 기간: " +
+      targets
+        .map((t) => `${t.year}${t.period === "half" ? "(반기)" : ""}`)
+        .join(", ")
+  );
 
   console.log("회사 목록을 가져오는 중...");
   const candidates = await resolveCompanies();
   console.log(`  키워드 후보 ${candidates.length}개사`);
 
   const jobs = candidates.flatMap((company) =>
-    years.map((year) => ({ company, year }))
+    targets.map((target) => ({ company, target }))
   );
 
   console.log(`보수 데이터 수집 중 (${jobs.length}건 조회)...`);
-  const fetched = await mapWithLimit(jobs, CONCURRENCY, async ({ company, year }) => {
+  const fetched = await mapWithLimit(jobs, CONCURRENCY, async ({ company, target }) => {
     try {
-      const rows = await fetchIndvdlPay(company.corp_code, year);
-      return { company, year, rows };
+      const rows = await fetchIndvdlPay(
+        company.corp_code,
+        target.year,
+        target.reprtCode
+      );
+      return { company, target, rows };
     } catch (err) {
-      console.warn(`  ! ${company.corp_name} ${year}: ${(err as Error).message}`);
-      return { company, year, rows: [] as IndvdlPayRow[] };
+      console.warn(
+        `  ! ${company.corp_name} ${target.year}: ${(err as Error).message}`
+      );
+      return { company, target, rows: [] as IndvdlPayRow[] };
     }
   });
 
   const records: PayRecord[] = [];
   const confirmed = new Map<string, Company>();
 
-  for (const { company, year, rows } of fetched) {
+  for (const { company, target, rows } of fetched) {
+    const { year, period } = target;
     // 유가증권(Y)·코스닥(K) 상장사만 — 이 정보는 보수 API 응답에만 들어있다.
     const listedRows = rows.filter((row) => MARKETS.has(row.corp_cls));
 
@@ -112,6 +167,7 @@ async function main() {
       confirmed.set(company.corp_code, company);
       records.push({
         year,
+        period,
         corpCode: company.corp_code,
         corpName: row.corp_name || company.corp_name,
         stockCode: company.stock_code,

@@ -4,8 +4,14 @@ import { XMLParser } from "fast-xml-parser";
 
 const BASE = "https://opendart.fss.or.kr/api";
 
-/** 사업보고서 */
+/** 사업보고서 — 회계연도 12개월 */
 export const REPRT_ANNUAL = "11011";
+
+/** 반기보고서 — 해당 사업연도 1~6월 누적 */
+export const REPRT_HALF = "11012";
+
+/** 보고서 종류 코드 */
+export type ReprtCode = typeof REPRT_ANNUAL | typeof REPRT_HALF;
 
 /** 조회된 데이터가 없을 때 DART가 돌려주는 상태코드 */
 const STATUS_NO_DATA = "013";
@@ -124,14 +130,20 @@ export type IndvdlPayRow = {
   stlm_dt: string;
 };
 
+/**
+ * reprtCode에 따라 같은 사업연도라도 집계 기간이 다르다.
+ * 11011=연간, 11012=상반기 누적. 공시 기준선(5억원)은 각 기간 지급액에 걸리므로
+ * 반기로 조회하면 대상 인원이 연간보다 적게 나온다.
+ */
 export function fetchIndvdlPay(
   corpCode: string,
-  year: string
+  year: string,
+  reprtCode: ReprtCode = REPRT_ANNUAL
 ): Promise<IndvdlPayRow[]> {
   return getList<IndvdlPayRow>("indvdlByPay.json", {
     corp_code: corpCode,
     bsns_year: year,
-    reprt_code: REPRT_ANNUAL,
+    reprt_code: reprtCode,
   });
 }
 

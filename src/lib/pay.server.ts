@@ -13,7 +13,10 @@ export function loadPayData(): PayDataset {
   try {
     const raw = readFileSync(resolve(process.cwd(), "data/pay.json"), "utf8");
     const parsed = JSON.parse(raw);
-    const records: PayRecord[] = parsed.records ?? [];
+    // period 도입 전에 수집한 pay.json에는 이 필드가 없다. 그때는 전부 사업보고서였다.
+    const records: PayRecord[] = (parsed.records ?? []).map(
+      (r: PayRecord): PayRecord => ({ ...r, period: r.period ?? "annual" })
+    );
 
     if (!records.length) return EMPTY;
 
