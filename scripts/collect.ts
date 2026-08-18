@@ -176,10 +176,38 @@ function assertNoCollapse(previous: PayRecord[], next: PayRecord[]): void {
   );
 }
 
+/**
+ * 병합 결과에 같은 사람이 두 번 들어가지 않았는지 본다.
+ *
+ * 병합 키가 어긋나면 기존 레코드가 교체되지 않고 그대로 남아 데이터가 두 배가
+ * 된다. 조용히 통과하면 화면에 중복 행이 뜨므로 여기서 멈춘다.
+ */
+function assertNoDuplicates(records: PayRecord[]): void {
+  const seen = new Set<string>();
+  const dupes: string[] = [];
+
+  for (const r of records) {
+    const key = `${r.year}|${r.period}|${r.corpCode}|${r.name}|${r.rceptNo}`;
+    if (seen.has(key)) dupes.push(`${r.year} ${r.corpName} ${r.name}`);
+    seen.add(key);
+  }
+
+  if (!dupes.length) return;
+  throw new Error(
+    `병합 결과에 중복 ${dupes.length}건이 있습니다. 데이터를 쓰지 않고 중단합니다.\n` +
+      dupes.slice(0, 5).map((d) => `  - ${d}`).join("\n")
+  );
+}
+
 function loadExisting(): { records: PayRecord[] } {
   try {
     const raw = readFileSync(resolve(DATA_DIR, "pay.json"), "utf8");
-    return { records: JSON.parse(raw).records ?? [] };
+    const records: PayRecord[] = JSON.parse(raw).records ?? [];
+    // period 도입 전에 만든 pay.json에는 이 필드가 없다. 채워주지 않으면 병합
+    // 키가 어긋나 기존 레코드가 교체되지 않고 통째로 중복된다.
+    return {
+      records: records.map((r) => ({ ...r, period: r.period ?? "annual" })),
+    };
   } catch {
     return { records: [] };
   }
@@ -282,6 +310,7 @@ async function main() {
     console.log(`  병합 후 ${merged.length}건 (기존 유지분 포함)`);
   }
 
+  assertNoDuplicates(merged);
   assertNoCollapse(previous, merged);
 
   // 저장 순서는 화면 정렬과 무관하다(PayExplorer가 다시 정렬한다). 금액순으로
