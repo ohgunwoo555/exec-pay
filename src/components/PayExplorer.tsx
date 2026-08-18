@@ -4,8 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   formatFullKRW,
   formatKRW,
+  periodLabel,
+  yearLabel,
   type PayDataset,
   type PayRecord,
+  type Period,
 } from "@/lib/pay";
 
 const PAGE_SIZE = 30;
@@ -24,6 +27,15 @@ export default function PayExplorer({ data }: { data: PayDataset }) {
   const [sort, setSort] = useState<SortKey>("total-desc");
   const [visible, setVisible] = useState(PAGE_SIZE);
   const [openRow, setOpenRow] = useState<string | null>(null);
+
+  // 연도별 집계 기간. 레코드에서 끌어오므로 pay.json 스키마를 더 건드리지 않는다.
+  const periodByYear = useMemo(() => {
+    const map = new Map<string, Period>();
+    for (const r of data.records) map.set(r.year, r.period);
+    return map;
+  }, [data.records]);
+
+  const periodOf = (y: string): Period => periodByYear.get(y) ?? "annual";
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -145,7 +157,7 @@ export default function PayExplorer({ data }: { data: PayDataset }) {
           <div className="flex flex-wrap items-center gap-2">
             {data.years.map((y) => (
               <Chip key={y} active={year === y} onClick={() => changeYear(y)}>
-                {y}
+                {yearLabel(y, periodOf(y))}
               </Chip>
             ))}
             <Chip active={year === ""} onClick={() => changeYear("")}>
@@ -167,8 +179,16 @@ export default function PayExplorer({ data }: { data: PayDataset }) {
 
       <p className="mt-4 text-sm text-[var(--fg-muted)]">
         {filtered.length.toLocaleString("ko-KR")}건
-        {year && ` · ${year} 사업연도`}
+        {year && ` · ${periodLabel(year, periodOf(year))}`}
       </p>
+
+      {(year ? periodOf(year) === "half" : [...periodByYear.values()].includes("half")) && (
+        <p className="squircle mt-2 border border-[var(--border)] bg-[var(--bg-subtle,transparent)] px-3 py-2 text-sm text-[var(--fg-muted)]">
+          상반기는 반기보고서 기준 1~6월 누적 금액입니다. 12개월치인 사업연도
+          금액과 직접 비교할 수 없고, 5억원 공시 기준도 6개월 지급액에 걸리므로
+          대상 인원이 적습니다.
+        </p>
+      )}
 
       <ol className="mt-3 flex flex-col gap-2">
         {shown.map((record, index) => (
@@ -210,7 +230,7 @@ function Header({ updatedAt }: { updatedAt: string | null }) {
   return (
     <header className="pt-12 sm:pt-16">
       <p className="text-sm font-medium text-[var(--accent)]">
-        DART 사업보고서 · 유가증권·코스닥 상장 증권·금융·투자
+        DART 사업보고서·반기보고서 · 유가증권·코스닥 상장 증권·금융·투자
       </p>
       <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
         임원 개인별 보수
@@ -287,7 +307,8 @@ function Row({
   open: boolean;
   onToggle: () => void;
 }) {
-  const hasDetail = record.breakdown.length > 0;
+  const detail = record.breakdown ?? [];
+  const hasDetail = detail.length > 0;
 
   return (
     <li className="squircle overflow-hidden border border-[var(--border)] bg-[var(--bg-elevated)]">
@@ -311,7 +332,7 @@ function Row({
               </span>
             </p>
             <p className="truncate text-sm text-[var(--fg-muted)]">
-              {record.corpName} · {record.year}
+              {record.corpName} · {yearLabel(record.year, record.period)}
             </p>
           </div>
           <div className="shrink-0 text-right">
@@ -345,7 +366,7 @@ function Row({
         <div className="border-t border-[var(--border)] px-4 py-4">
           {hasDetail ? (
             <ul className="flex flex-col gap-3">
-              {record.breakdown.map((item, i) => (
+              {detail.map((item, i) => (
                 <li key={i}>
                   <div className="flex items-baseline justify-between gap-4">
                     <p className="text-sm font-medium">{item.label}</p>

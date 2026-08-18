@@ -4,8 +4,14 @@ import { XMLParser } from "fast-xml-parser";
 
 const BASE = "https://opendart.fss.or.kr/api";
 
-/** 사업보고서 */
+/** 사업보고서 — 회계연도 12개월 */
 export const REPRT_ANNUAL = "11011";
+
+/** 반기보고서 — 해당 사업연도 1~6월 누적 */
+export const REPRT_HALF = "11012";
+
+/** 보고서 종류 코드 */
+export type ReprtCode = typeof REPRT_ANNUAL | typeof REPRT_HALF;
 
 /** 조회된 데이터가 없을 때 DART가 돌려주는 상태코드 */
 const STATUS_NO_DATA = "013";
@@ -75,12 +81,34 @@ export type CorpCodeEntry = {
 };
 
 /**
+ * DART는 인증키 오류나 점검 중일 때 ZIP 대신 <result><status>…</status></result>
+ * 를 돌려준다. 그대로 ZIP 파서에 넘기면 "Invalid or unsupported zip format" 같은
+ * 엉뚱한 메시지가 나와 원인을 못 찾는다. 그래서 여기서 먼저 걸러낸다.
+ */
+function assertNotErrorXml(body: Buffer, what: string): void {
+  if (body.subarray(0, 5).toString("latin1") !== "<?xml") return;
+
+  const text = body.toString("utf8");
+  const status = /<status>(\d+)<\/status>/.exec(text)?.[1] ?? "?";
+  const message = /<message>([^<]*)<\/message>/.exec(text)?.[1] ?? "알 수 없음";
+
+  const hint =
+    status === "010" || status === "011" || status === "012"
+      ? " — .env.local의 DART_API_KEY를 확인하세요."
+      : "";
+  throw new Error(`${what} 실패 [${status}] ${message}${hint}`);
+}
+
+/**
  * 전체 공시대상 회사의 고유번호 목록. ZIP 안에 CORPCODE.xml 하나가 들어있다.
  * 10만 건이 넘고 자주 바뀌지 않으므로 호출한 쪽에서 캐시하는 것을 권장.
  */
 export async function fetchCorpCodes(): Promise<CorpCodeEntry[]> {
   const res = await fetchWithRetry(url("corpCode.xml", {}));
-  const zip = new AdmZip(Buffer.from(await res.arrayBuffer()));
+  const body = Buffer.from(await res.arrayBuffer());
+  assertNotErrorXml(body, "고유번호 목록 조회");
+
+  const zip = new AdmZip(body);
 
   const entry = zip.getEntries().find((e) => e.entryName.endsWith(".xml"));
   if (!entry) throw new Error("corpCode.zip 안에서 XML을 찾지 못했습니다.");
@@ -124,14 +152,20 @@ export type IndvdlPayRow = {
   stlm_dt: string;
 };
 
+/**
+ * reprtCode에 따라 같은 사업연도라도 집계 기간이 다르다.
+ * 11011=연간, 11012=상반기 누적. 공시 기준선(5억원)은 각 기간 지급액에 걸리므로
+ * 반기로 조회하면 대상 인원이 연간보다 적게 나온다.
+ */
 export function fetchIndvdlPay(
   corpCode: string,
-  year: string
+  year: string,
+  reprtCode: ReprtCode = REPRT_ANNUAL
 ): Promise<IndvdlPayRow[]> {
   return getList<IndvdlPayRow>("indvdlByPay.json", {
     corp_code: corpCode,
     bsns_year: year,
-    reprt_code: REPRT_ANNUAL,
+    reprt_code: reprtCode,
   });
 }
 
@@ -151,12 +185,7 @@ export async function fetchDocument(rceptNo: string): Promise<string> {
   const body = Buffer.from(await res.arrayBuffer());
 
   // 원문이 없으면 ZIP 대신 <result><status>014</status>… 가 온다
-  if (body.subarray(0, 5).toString("latin1") === "<?xml") {
-    const text = body.toString("utf8");
-    const status = /<status>(\d+)<\/status>/.exec(text)?.[1] ?? "?";
-    const message = /<message>([^<]*)<\/message>/.exec(text)?.[1] ?? "원문 없음";
-    throw new Error(`원문 조회 불가 [${status}] ${message}`);
-  }
+  assertNotErrorXml(body, `원문 조회(${rceptNo})`);
 
   const zip = new AdmZip(body);
   const entries = zip.getEntries().filter((e) => e.entryName.endsWith(".xml"));
