@@ -46,3 +46,7 @@ next-env.d.ts
 
 # npm 락파일 — 이 프로젝트는 pnpm을 쓴다
 package-lock.json
+
+# 임시 검증 스크립트
+_*.ts
+_*.py
