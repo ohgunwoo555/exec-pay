@@ -17,6 +17,7 @@ import {
   type ReprtCode,
 } from "./lib/dart.js";
 import { resolveCompanies, type Company } from "./lib/companies.js";
+import { collectFromDocuments } from "./lib/doc-fallback.js";
 import type { PayRecord, Period } from "./lib/types.js";
 
 process.loadEnvFile(".env.local");
@@ -227,6 +228,8 @@ async function main() {
   const forceHalf = process.argv.includes("--half");
   // --merge: 덮어쓰지 않고 이번에 받은 조각만 갈아끼운다 (일별 수집용)
   const mergeMode = process.argv.includes("--merge");
+  // --no-doc-fallback: API가 비어도 원문을 뒤지지 않는다
+  const docFallback = !process.argv.includes("--no-doc-fallback");
   const targets: Target[] = args.length
     ? args.map((year) => ({
         year,
@@ -302,16 +305,52 @@ async function main() {
 
   console.log(`  ${confirmed.size}개사 / ${records.length}건 수집`);
 
+  const previousRecords = loadExisting().records;
+
+  if (docFallback) {
+    for (const target of targets) {
+      const got = new Set(
+        records.filter((r) => r.year === target.year).map((r) => r.corpCode)
+      );
+
+      // 이전 연도에 공시 이력이 있는 회사만 뒤진다. 원문이 회사당 14MB라
+      // 전체를 훑으면 실행 시간과 전송량이 감당되지 않는다.
+      const known = [...confirmed.values()].filter((c) => !got.has(c.corp_code));
+      const historical = new Set(previousRecords.map((r) => r.corpCode));
+      const candidates = known.filter((c) => historical.has(c.corp_code));
+
+      if (!candidates.length) continue;
+
+      console.log(
+        `  ${target.year}: API 미제공 ${candidates.length}개사를 원문에서 확인합니다...`
+      );
+      const result = await collectFromDocuments(
+        candidates,
+        target.year,
+        target.period
+      );
+      console.log(
+        `    원문 ${result.attempted}개사 중 ${result.matched}개사 / ${result.records.length}건`
+      );
+      records.push(...result.records);
+      for (const r of result.records) {
+        const company = confirmed.get(r.corpCode);
+        if (company) confirmed.set(r.corpCode, company);
+      }
+    }
+  }
+
   // 보수 종류별 세부 내역은 원문을 파싱해야 하므로 pnpm enrich 가 이어서 붙인다.
-  const previous = loadExisting().records;
-  const merged = mergeMode ? mergeRecords(previous, records) : records;
+  const merged = mergeMode
+    ? mergeRecords(previousRecords, records)
+    : records;
 
   if (mergeMode) {
     console.log(`  병합 후 ${merged.length}건 (기존 유지분 포함)`);
   }
 
   assertNoDuplicates(merged);
-  assertNoCollapse(previous, merged);
+  assertNoCollapse(previousRecords, merged);
 
   // 저장 순서는 화면 정렬과 무관하다(PayExplorer가 다시 정렬한다). 금액순으로
   // 두면 레코드 하나만 늘어도 그 아래가 전부 밀려 매일 수백 줄짜리 diff가 난다.

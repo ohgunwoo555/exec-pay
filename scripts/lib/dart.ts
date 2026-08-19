@@ -99,6 +99,32 @@ function assertNotErrorXml(body: Buffer, what: string): void {
   throw new Error(`${what} 실패 [${status}] ${message}${hint}`);
 }
 
+export type FilingEntry = {
+  corp_code: string;
+  corp_name: string;
+  report_nm: string;
+  rcept_no: string;
+  rcept_dt: string;
+};
+
+/**
+ * 정기공시 목록. 원문에서 직접 읽어야 할 때 접수번호를 찾는 용도다.
+ * pblntf_ty=A 가 정기공시(사업·반기·분기보고서).
+ */
+export function fetchFilings(
+  corpCode: string,
+  bgnDe: string,
+  endDe: string
+): Promise<FilingEntry[]> {
+  return getList<FilingEntry>("list.json", {
+    corp_code: corpCode,
+    bgn_de: bgnDe,
+    end_de: endDe,
+    pblntf_ty: "A",
+    page_count: "100",
+  });
+}
+
 /**
  * 전체 공시대상 회사의 고유번호 목록. ZIP 안에 CORPCODE.xml 하나가 들어있다.
  * 10만 건이 넘고 자주 바뀌지 않으므로 호출한 쪽에서 캐시하는 것을 권장.
