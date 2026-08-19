@@ -313,19 +313,24 @@ async function main() {
         records.filter((r) => r.year === target.year).map((r) => r.corpCode)
       );
 
-      // 이전 연도에 공시 이력이 있는 회사만 뒤진다. 원문이 회사당 14MB라
-      // 전체를 훑으면 실행 시간과 전송량이 감당되지 않는다.
-      const known = [...confirmed.values()].filter((c) => !got.has(c.corp_code));
+      // 후보는 조회 대상 전체에서 고른다. confirmed(이번에 API가 준 회사)에서
+      // 고르면, API가 아무것도 못 준 상황 — 폴백이 정확히 필요한 그 상황 — 에서
+      // 후보가 0개가 된다.
+      //
+      // 원문이 회사당 14MB라 전체를 훑을 수는 없으므로, 이전 연도에 공시 이력이
+      // 있는 회사로 좁힌다.
       const historical = new Set(previousRecords.map((r) => r.corpCode));
-      const candidates = known.filter((c) => historical.has(c.corp_code));
+      const docTargets = candidates.filter(
+        (c) => !got.has(c.corp_code) && historical.has(c.corp_code)
+      );
 
-      if (!candidates.length) continue;
+      if (!docTargets.length) continue;
 
       console.log(
-        `  ${target.year}: API 미제공 ${candidates.length}개사를 원문에서 확인합니다...`
+        `  ${target.year}: API 미제공 ${docTargets.length}개사를 원문에서 확인합니다...`
       );
       const result = await collectFromDocuments(
-        candidates,
+        docTargets,
         target.year,
         target.period
       );
@@ -333,8 +338,11 @@ async function main() {
         `    원문 ${result.attempted}개사 중 ${result.matched}개사 / ${result.records.length}건`
       );
       records.push(...result.records);
+
+      // 폴백으로 찾은 회사도 companies.json에 들어가야 한다
+      const byCode = new Map(docTargets.map((c) => [c.corp_code, c]));
       for (const r of result.records) {
-        const company = confirmed.get(r.corpCode);
+        const company = byCode.get(r.corpCode);
         if (company) confirmed.set(r.corpCode, company);
       }
     }

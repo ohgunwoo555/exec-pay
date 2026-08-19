@@ -4,6 +4,16 @@
  *
  * OpenDART의 indvdlByPay는 원문 접수 후 적재까지 시차가 있어, 공시가 이미
  * 올라왔는데도 한동안 013(데이터 없음)이 나온다. 그동안 원문에서 직접 읽는다.
+ *
+ * 표는 사람 하나가 TABLE-GROUP 하나이고, 그 안에 당기·전기·전전기 블록이 있다.
+ *
+ *   이름   | 사업연도 | 직위       | 보수총액 | …
+ *   신윤철 | 당기     | 영업지점장 |    1,469 | …   ← CFY, 반기보고서면 상반기
+ *          | 전기     | 영업지점장 |    1,698 | …   ← PFY, 연간
+ *          | 전전기   | 영업지점장 |    1,328 | …   ← BPFY, 연간
+ *
+ * 칸은 위치가 아니라 ACODE 속성으로 집는다(CMPK_NM/CMPK_LEV/CMPK_PAY).
+ * 회사마다 표 폭과 헤더 문구가 달라도 이 코드는 DART 서식이 강제한다.
  */
 import * as cheerio from "cheerio";
 
@@ -36,12 +46,14 @@ const GROUP_PATTERN =
   /<TABLE-GROUP[^>]*ACLASS="SUB_CMPK_HIGH"[^>]*>[\s\S]*?<\/TABLE-GROUP>/g;
 
 /**
- * 단위 표기는 그룹 안 첫 표에 <TU>(단위 : 원, 주)</TU> 꼴로 들어 있다.
- * 회사마다 다르다 — 삼성은 백만원, 키움은 원. 그룹 밖을 뒤지면 앞선 다른 표의
- * 단위가 딸려와 배수가 어긋나므로 반드시 그룹 안에서만 찾는다.
+ * 단위 표기는 그룹 밖 별도 표에 한 번만 적히고 뒤따르는 표들이 공유한다.
+ * 그래서 그룹 앞쪽에서 가장 가까운 것을 찾아 이어받는다.
  */
-function unitOf(group: string): number {
-  const text = /\(단위\s*:\s*([^)]*)\)/.exec(group)?.[1] ?? "";
+function unitBefore(doc: string, at: number): number {
+  const window = doc.slice(Math.max(0, at - 20_000), at);
+  const matches = [...window.matchAll(/\(단위\s*:\s*([^)]*)\)/g)];
+  const text = matches.at(-1)?.[1] ?? "";
+
   for (const unit of ["백만원", "억원", "만원", "천원", "원"]) {
     if (text.includes(unit)) return UNIT_MULTIPLIER[unit];
   }
@@ -58,7 +70,8 @@ function toNumber(raw: string): number | null {
 /**
  * 그룹 하나에서 당기 행만 뽑는다.
  *
- * 전기·전전기는 연간 금액이라 반기 데이터에 섞이면 안 된다.
+ * 전기·전전기는 연간 금액이라 반기 데이터에 섞이면 안 된다. 각주의
+ * "각 사업연도 마지막월 평균종가 … 2026년 6월" 표기가 이 구분을 뒷받침한다.
  */
 function parseGroup(group: string, multiplier: number): IndvdlDocRow | null {
   const $ = cheerio.load(group, { xml: true });
@@ -66,13 +79,12 @@ function parseGroup(group: string, multiplier: number): IndvdlDocRow | null {
   const name = $('[ACODE="CMPK_NM"]').first().text().trim();
   if (!name) return null;
 
+  // 당기 표시가 붙은 행에 직위와 보수총액이 같이 들어 있다.
   const $current = $(`[AUNITVALUE="${CURRENT_TERM}"]`).first().closest("TR");
   if (!$current.length) return null;
 
   const position = $current.find('[ACODE="CMPK_LEV"]').first().text().trim();
-  const amount = toNumber(
-    $current.find('[ACODE="CMPK_PAY"]').first().text().trim()
-  );
+  const amount = toNumber($current.find('[ACODE="CMPK_PAY"]').first().text().trim());
   if (amount === null) return null;
 
   return {
@@ -86,8 +98,7 @@ export function parseIndvdlDoc(doc: string): IndvdlDocRow[] {
   const rows: IndvdlDocRow[] = [];
 
   for (const match of doc.matchAll(GROUP_PATTERN)) {
-    const group = match[0];
-    const row = parseGroup(group, unitOf(group));
+    const row = parseGroup(match[0], unitBefore(doc, match.index ?? 0));
     if (row) rows.push(row);
   }
   return dedupe(rows);
